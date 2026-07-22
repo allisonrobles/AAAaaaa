@@ -3,7 +3,7 @@
 data_handler.py
 ===============
 
-Builds ONE merged DataFrame for NSW1 price forecasting + battery dispatch,
+Builds ONE merged DataFrame for TAS1 price forecasting + battery dispatch,
 and turns it into leakage-free supervised training tables.
 
 THE CENTRAL IDEA: forecast vintages
@@ -40,7 +40,7 @@ Three clocks, kept separate on purpose:
   time_utc    the index. Unambiguous, no DST, all merging happens here.
   time_aest   market time. Fixed UTC+10, DST NEVER applies. AEMO's
               SETTLEMENTDATE lives here.
-  time_local  Australia/Sydney, DST-aware. Human behaviour follows the wall
+  time_local  Australia/Hobart, DST-aware. Human behaviour follows the wall
               clock, so ALL calendar features are derived from this.
 
 `to_utc_series()` handles the two DST pathologies when a source is stored in
@@ -59,7 +59,7 @@ Usage
     python data_handler.py --self-test          # offline, run this first
 
     python data_handler.py \
-        --price-csv nsw_price_demand.csv \
+        --price-csv tas_price_demand.csv \
         --start-date 2024-03-01 --end-date 2026-07-14 \
         --output-dir build
 
@@ -169,12 +169,12 @@ def to_utc_series(
     tz:
       "market"  AEST, fixed UTC+10, no DST. AEMO's SETTLEMENTDATE. Safe.
       "utc"     already UTC.
-      <IANA>    e.g. "Australia/Sydney". Civil local time, WITH DST. This is
+      <IANA>    e.g. "Australia/Hobart". Civil local time, WITH DST. This is
                 the dangerous one and is why this function exists.
 
     Two DST pathologies are handled explicitly for the IANA case:
 
-      AMBIGUOUS (DST ends, first Sunday in April in NSW): 02:00-03:00 local
+      AMBIGUOUS (DST ends, first Sunday in April in TAS): 02:00-03:00 local
         happens twice. `ambiguous="infer"` uses the monotonic ordering of a
         regular series to tell the first pass from the second. If the series
         is irregular and inference fails, we fall back to assuming the FIRST
@@ -448,7 +448,7 @@ def load_price_5min(
     price_col: str = "RRP",
     demand_col: Optional[str] = "TOTALDEMAND",
     region_col: Optional[str] = "REGION",
-    region_id: Optional[str] = "NSW1",
+    region_id: Optional[str] = "TAS1",
     tz: str = "market",
     time_format: Optional[str] = "%Y/%m/%d %H:%M:%S",
     interval_ending: bool = True,
@@ -525,7 +525,7 @@ def load_hourly_table(path: str | Path, time_col: str, tz: str = "market",
                       time_format: Optional[str] = None,
                       suffix: str = "") -> pd.DataFrame:
     """Load your existing hourly feature table (e.g. the weather CSV you
-    already have) onto a UTC index. Set tz="Australia/Sydney" if it was
+    already have) onto a UTC index. Set tz="Australia/Hobart" if it was
     fetched in local civil time -- then DST is handled by to_utc_series."""
     df = pd.read_csv(path)
     if time_col not in df.columns:
@@ -807,7 +807,7 @@ def validate_master_frame(df: pd.DataFrame, freq_minutes: int = 5,
                        len(obs), obs[:3])
 
     if "is_dst" in df.columns:
-        logger.info("DST: %.1f%% of rows are in daylight saving (expect ~45%% for NSW)",
+        logger.info("DST: %.1f%% of rows are in daylight saving (expect ~45%% for TAS)",
                     100 * df["is_dst"].mean())
 
     nan = df.isna().mean().sort_values(ascending=False)
@@ -827,29 +827,30 @@ def validate_master_frame(df: pd.DataFrame, freq_minutes: int = 5,
 
 def _self_test() -> None:
     logger.info("=== SELF TEST (synthetic, no network) ===")
-    region = NEM_REGIONS["NSW1"]
+    region = NEM_REGIONS["TAS1"]
     rng = np.random.default_rng(0)
 
     # --- 1. DST handling -------------------------------------------------
-    # NSW DST ends 06 Apr 2025 (02:00 local repeats) and starts 05 Oct 2025
-    # (02:00-03:00 local never happens).
+    # Tasmanian DST ends 06 Apr 2025 (02:00 local repeats) and starts
+    # 05 Oct 2025 (02:00-03:00 local never happens). Same switch dates as
+    # the mainland south-east; only the start date differs in some years.
     # Round-tripping UTC -> local -> naive reproduces the real repeated hour
     # that a local-time logger would have written (02:00 appears twice).
     apr_utc = pd.date_range("2025-04-05 12:00", "2025-04-07 12:00", freq="h", tz="UTC")
-    apr = apr_utc.tz_convert("Australia/Sydney").tz_localize(None)
+    apr = apr_utc.tz_convert("Australia/Hobart").tz_localize(None)
     assert apr.duplicated().any(), "test fixture should contain the repeated hour"
-    rep = dst_report(pd.Series(apr), "Australia/Sydney")
+    rep = dst_report(pd.Series(apr), "Australia/Hobart")
     assert rep["ambiguous_stamps"] > 0, "fixture should look ambiguous to the reporter"
-    utc_apr = to_utc_series(pd.Series(apr), tz="Australia/Sydney", label="DST-end test")
+    utc_apr = to_utc_series(pd.Series(apr), tz="Australia/Hobart", label="DST-end test")
     assert utc_apr.is_monotonic_increasing, "DST-end conversion broke ordering"
     assert utc_apr.is_unique, "DST-end conversion produced duplicate instants"
     assert len(utc_apr) == len(apr), "rows lost at DST end"
 
     # A naive range across DST start DOES contain the hour that never happened.
     oct_ = pd.date_range("2025-10-04 12:00", "2025-10-06 12:00", freq="h")
-    rep_oct = dst_report(pd.Series(oct_), "Australia/Sydney")
+    rep_oct = dst_report(pd.Series(oct_), "Australia/Hobart")
     assert rep_oct["nonexistent_stamps"] > 0, "fixture should contain the skipped hour"
-    utc_oct = to_utc_series(pd.Series(oct_), tz="Australia/Sydney", label="DST-start test")
+    utc_oct = to_utc_series(pd.Series(oct_), tz="Australia/Hobart", label="DST-start test")
     assert len(utc_oct) == len(oct_) and utc_oct.is_monotonic_increasing
     logger.info("  DST end/start conversion OK (no rows lost, ordering intact)")
 
@@ -863,9 +864,9 @@ def _self_test() -> None:
     n = 40 * 288
     aest = pd.date_range("2024-03-01 00:05:00", periods=n, freq="5min")
     raw = pd.DataFrame({
-        "REGION": "NSW1",
+        "REGION": "TAS1",
         "SETTLEMENTDATE": aest.strftime("%Y/%m/%d %H:%M:%S"),
-        "TOTALDEMAND": 8000 + 1500 * np.sin(np.arange(n) * 2 * np.pi / 288),
+        "TOTALDEMAND": 1150 + 200 * np.sin(np.arange(n) * 2 * np.pi / 288),
         "RRP": 90 + 60 * np.sin(np.arange(n) * 2 * np.pi / 288) + rng.normal(0, 8, n),
         "PERIODTYPE": "TRADE",
     })
@@ -963,6 +964,30 @@ So "if it works on wholesale it will work with charges" is backwards. Say
 instead: "we measure the wholesale arbitrage value, which is an UPPER BOUND
 on what a retail-tariff household could capture from grid-to-grid trading."
 That is defensible, and it is one line on the limitations slide.
+
+TAS1 specifics worth a sentence of their own
+--------------------------------------------
+Tasmania is not a scaled-down NSW, and the differences all point the same
+way -- at the arbitrage spread, which is what the battery earns from:
+
+  * Generation is overwhelmingly hydro, which is itself a storage asset.
+    Hydro schedulers already arbitrage the intraday shape, so the residual
+    spread left for a battery is usually thinner than on the mainland.
+  * Basslink couples TAS1 to VIC1 with a ~500 MW limit. Prices track
+    Victoria while the link is unconstrained and decouple sharply when it
+    binds or trips, so interconnector flow matters more here than any
+    weather variable. If you get an OpenElectricity key, the
+    flow_imports / flow_exports columns are the ones to look at first.
+  * There is almost no rooftop or utility solar, so the mainland "duck
+    curve" midday price trough is largely absent. Features built around
+    shortwave_radiation will carry much less signal than they would in
+    NSW1 or SA1; wind_speed_100m (large wind fleet) will carry more.
+  * Demand is winter-peaking and heavily industrial (the smelters are a
+    large, fairly flat block), so the weather-to-demand relationship is
+    weaker and skewed towards cold rather than heat.
+  * Hydro storage levels are a slow-moving state variable that drives price
+    over months. Nothing in this handler captures it; that is a known gap,
+    not an oversight.
 """
 
 
@@ -976,12 +1001,12 @@ That is defensible, and it is one line on the limitations slide.
 class DatasetConfig:
     """Everything the build needs. Edit the defaults or pass overrides:
 
-        df = build_dataset(data_folder="data", region="NSW1")
+        df = build_dataset(data_folder="data", region="TAS1")
     """
     # --- your AEMO CSVs ---
     data_folder: Path = Path("data")
     price_glob: str = "*.csv"
-    region: str = "NSW1"
+    region: str = "TAS1"
     time_col: str = "SETTLEMENTDATE"
     price_col: str = "RRP"
     demand_col: Optional[str] = "TOTALDEMAND"
@@ -1131,7 +1156,8 @@ def build_dataset(cfg: Optional[DatasetConfig] = None, **overrides) -> pd.DataFr
         )
     else:
         logger.warning("No OpenElectricity key -- no generation mix, so no "
-                       "residual_demand. That is the strongest price predictor "
+                       "residual_demand, and no Basslink flow columns. In TAS1 "
+                       "the interconnector is the strongest price predictor "
                        "you're leaving on the table. Free key: "
                        "https://platform.openelectricity.org.au")
 
@@ -1185,9 +1211,9 @@ def _self_test_build_dataset() -> None:
         # Two overlapping monthly files, exactly like real AEMO downloads.
         for i, sl in enumerate([slice(0, 12 * 288), slice(10 * 288, n)]):
             pd.DataFrame({
-                "REGION": "NSW1",
+                "REGION": "TAS1",
                 "SETTLEMENTDATE": aest[sl].strftime("%Y/%m/%d %H:%M:%S"),
-                "TOTALDEMAND": 8000 + rng.normal(0, 200, len(aest[sl])),
+                "TOTALDEMAND": 1150 + rng.normal(0, 60, len(aest[sl])),
                 "RRP": 90 + rng.normal(0, 20, len(aest[sl])),
                 "PERIODTYPE": "TRADE",
             }).to_csv(folder / f"part{i}.csv", index=False)
@@ -1230,7 +1256,7 @@ def _self_test_build_dataset() -> None:
 
 CONFIG = DatasetConfig(
     data_folder=Path("data"),   # folder holding your AEMO CSVs
-    region="NSW1",
+    region="TAS1",
     lead_days=(1, 2),           # forecast vintages: 24 h and 48 h
     decision_freq="30min",
     horizons=(30, 360, 1440, 2160),
@@ -1256,3 +1282,4 @@ if __name__ == "__main__":
             print(f"supervised h={h:>5} min: {frame.shape[0]:,} rows x "
                   f"{frame.shape[1] - 4} features")
         print(README_NOTES)
+

@@ -7,7 +7,7 @@ import pandas as pd
 # Define the configuration
 config = DatasetConfig(
     data_folder="data",
-    region="NSW1",
+    region="TAS1",
     lead_days=(1, 2),
     decision_freq="30min",
     horizons=(30, 360, 1440, 2160),
@@ -27,9 +27,9 @@ else:
 # Save data for faster usage
 data_df.to_parquet('data.parquet', compression='snappy')
 
-apply_eda(data_df)
-
 # preprocess the data
 data_df = pre_process_data(data_df)
+
+apply_eda(data_df)
 
 print ("Preprocessed data shape:", data_df.shape)
